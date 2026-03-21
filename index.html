@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>贪吃蛇之太空危机逃亡</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <canvas id="game"></canvas>
+
+      <div class="hud">
+        <section class="panel minimap-panel">
+          <div class="panel-title">战场地图</div>
+          <canvas id="minimap" width="280" height="280"></canvas>
+          <div id="hpReadout" class="hp-readout"></div>
+        </section>
+
+        <section class="panel top-bar">
+          <div class="top-bar-main">
+            <div id="phaseBanner" class="phase-banner">第 1 阶段</div>
+            <div id="warningText" class="warning-text"></div>
+          </div>
+          <div class="stats-row">
+            <div id="timerLabel" class="stat-pill">00:00</div>
+            <div id="aliveLabel" class="stat-pill">剩余 20</div>
+            <div id="killLabel" class="stat-pill">击杀 0</div>
+          </div>
+        </section>
+
+        <section class="panel leaderboard-panel">
+          <div class="panel-title">存活排行</div>
+          <div id="leaderboard" class="leaderboard"></div>
+          <div class="controls">
+            <div>移动 WASD / ↑↓←→</div>
+            <div>导弹 Space</div>
+            <div>加速 N</div>
+            <div>重新开始 R</div>
+          </div>
+        </section>
+
+        <section class="status-strip">
+          <div class="status-title">当前副作用</div>
+          <div class="status-list">
+            <div class="status-card" data-effect="magnet">
+              <div class="status-ring"></div>
+              <div class="status-icon">M</div>
+              <div class="status-label">磁铁</div>
+              <div class="status-timer">0.0s</div>
+            </div>
+            <div class="status-card" data-effect="slow">
+              <div class="status-ring"></div>
+              <div class="status-icon">S</div>
+              <div class="status-label">减速</div>
+              <div class="status-timer">0.0s</div>
+            </div>
+            <div class="status-card" data-effect="shield">
+              <div class="status-ring"></div>
+              <div class="status-icon">P</div>
+              <div class="status-label">保护</div>
+              <div class="status-timer">0.0s</div>
+            </div>
+            <div class="status-card radiation-card" data-effect="radiation">
+              <div class="status-ring"></div>
+              <div class="status-icon">R</div>
+              <div class="status-label">辐射</div>
+              <div class="status-timer">持续中</div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel missile-panel">
+          <div class="missile-icon">
+            <div class="missile-core"></div>
+          </div>
+          <div>
+            <div class="panel-title">导弹库存</div>
+            <div id="missileCount" class="missile-count">x0</div>
+          </div>
+        </section>
+      </div>
+
+      <div id="startScreen" class="overlay">
+        <div class="overlay-card mode-card">
+          <div class="panel-title">模式选择</div>
+          <div class="overlay-title">贪吃蛇之太空危机逃亡</div>
+          <div class="overlay-body">
+            选择开始方式。单机模式直接开始，联机模式进入房间大厅。
+          </div>
+          <div class="mode-grid">
+            <button id="singleModeButton" class="mode-button primary" type="button">单机模式</button>
+            <button id="onlineModeButton" class="mode-button" type="button">联机模式</button>
+          </div>
+          <div id="modeHint" class="mode-hint">
+            单机：20 蛇混战，19 条 AI，直接开始。
+          </div>
+
+          <div id="onlinePanel" class="online-panel hidden">
+            <div class="online-grid">
+              <label class="field">
+                <span>服务器</span>
+                <input id="serverUrlInput" type="text" placeholder="留空默认当前地址" />
+              </label>
+              <label class="field">
+                <span>昵称</span>
+                <input id="playerNameInput" type="text" maxlength="18" placeholder="输入你的代号" />
+              </label>
+            </div>
+
+            <div class="online-actions">
+              <button id="createRoomButton" class="mode-button primary compact" type="button">创建房间</button>
+              <input id="roomCodeInput" class="room-code-input" type="text" maxlength="6" placeholder="房间码" />
+              <button id="joinRoomButton" class="mode-button compact" type="button">加入房间</button>
+              <button id="backToModesButton" class="mode-button compact ghost" type="button">返回</button>
+            </div>
+
+            <div id="onlineStatus" class="online-status">联机大厅未连接</div>
+
+            <div id="roomPanel" class="room-panel hidden">
+              <div class="room-meta">
+                <div>房间码 <strong id="roomCodeLabel">----</strong></div>
+                <div>阶段 <strong id="roomPhaseLabel">大厅</strong></div>
+              </div>
+              <div id="onlinePlayerList" class="online-player-list"></div>
+              <div class="online-actions room-actions">
+                <button id="readyButton" class="mode-button compact" type="button">准备</button>
+                <button id="startRoomButton" class="mode-button compact" type="button">房主开始</button>
+                <button id="leaveRoomButton" class="mode-button compact ghost" type="button">离开房间</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="toastLayer" class="toast-layer"></div>
+
+      <div id="overlay" class="overlay hidden">
+        <div class="overlay-card">
+          <div id="overlayTitle" class="overlay-title">游戏结束</div>
+          <div id="overlayBody" class="overlay-body"></div>
+          <button id="restartButton" class="restart-button" type="button">再来一局</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="game.js"></script>
+  </body>
+</html>
