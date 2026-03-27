@@ -235,6 +235,7 @@
         eventSource: null,
         matchActive: false,
         matchFetchInFlight: false,
+        matchPollTimer: 0,
         lastInputSentAt: 0,
         lastInputSignature: "",
         fireSeq: 0,
@@ -478,6 +479,10 @@
       this.multiplayer.playerId = "";
       this.multiplayer.matchActive = false;
       this.multiplayer.matchFetchInFlight = false;
+      if (this.multiplayer.matchPollTimer) {
+        window.clearTimeout(this.multiplayer.matchPollTimer);
+      }
+      this.multiplayer.matchPollTimer = 0;
       this.multiplayer.lastInputSentAt = 0;
       this.multiplayer.lastInputSignature = "";
       this.multiplayer.fireSeq = 0;
@@ -531,6 +536,10 @@
       const wasFinished = this.finished;
       this.selectedMode = "online";
       this.multiplayer.matchActive = true;
+      if (this.multiplayer.matchPollTimer) {
+        window.clearTimeout(this.multiplayer.matchPollTimer);
+      }
+      this.multiplayer.matchPollTimer = 0;
       this.time = snapshot.time || 0;
       this.zoneTargets = snapshot.zoneTargets || this.zoneTargets;
       this.chestEvents = snapshot.chestEvents || [];
@@ -660,7 +669,7 @@
       }
 
       if ((room.phase === "playing" || room.phase === "finished") && !this.multiplayer.matchActive) {
-        this.fetchOnlineMatchSnapshot();
+        this.ensureOnlineMatchPolling();
       }
 
       roomPanel.classList.remove("hidden");
@@ -694,6 +703,28 @@
         .join("");
     }
 
+    ensureOnlineMatchPolling() {
+      if (this.multiplayer.matchActive || this.multiplayer.matchPollTimer) {
+        return;
+      }
+      const poll = () => {
+        this.multiplayer.matchPollTimer = 0;
+        if (
+          this.multiplayer.matchActive ||
+          !this.multiplayer.room ||
+          !this.multiplayer.playerId ||
+          (this.multiplayer.room.phase !== "playing" && this.multiplayer.room.phase !== "finished")
+        ) {
+          return;
+        }
+        this.fetchOnlineMatchSnapshot();
+        if (!this.multiplayer.matchActive) {
+          this.multiplayer.matchPollTimer = window.setTimeout(poll, 500);
+        }
+      };
+      poll();
+    }
+
     async fetchOnlineMatchSnapshot() {
       if (
         this.multiplayer.matchFetchInFlight ||
@@ -715,6 +746,9 @@
           this.applyOnlineMatchSnapshot(payload.match);
         }
       } catch (_error) {
+        if (this.multiplayer.room && this.multiplayer.room.phase === "playing") {
+          onlineStatus.textContent = "战斗同步中...";
+        }
       } finally {
         this.multiplayer.matchFetchInFlight = false;
       }
@@ -806,7 +840,7 @@
         this.multiplayer.room = payload.room;
         this.renderOnlineRoom();
         if (payload.room && (payload.room.phase === "playing" || payload.room.phase === "finished")) {
-          this.fetchOnlineMatchSnapshot();
+          this.ensureOnlineMatchPolling();
         }
       } catch (error) {
         onlineStatus.textContent = error.message;

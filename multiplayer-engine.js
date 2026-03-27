@@ -1351,13 +1351,13 @@ class MultiplayerMatch {
   serializeSnake(snake, playerId, focus) {
     const includeTrail =
       snake.playerId === playerId ||
-      this.isNearFocus(snake, focus, 920);
+      this.isNearFocus(snake, focus, 760);
     const step =
       snake.playerId === playerId
         ? 1
         : snake.radius > 20
-          ? 4
-          : 3;
+          ? 7
+          : 6;
     const trail = [];
     if (includeTrail) {
       for (let i = 0; i < snake.trail.length; i += step) {
@@ -1407,9 +1407,9 @@ class MultiplayerMatch {
 
   createSnapshotFor(playerId) {
     const focus = this.getSpectatorTarget(playerId);
-    const range = 860;
+    const range = 700;
     const dots = [];
-    let normalDotBudget = 180;
+    let normalDotBudget = 90;
     const zone = this.getCurrentZone(this.time);
     const incoming = this.getIncomingZone(this.time);
 
@@ -1419,7 +1419,7 @@ class MultiplayerMatch {
         continue;
       }
       if (dot.kind === "dot") {
-        if (!this.isNearFocus(dot, focus, 520) && i % 3 !== 0) {
+        if (!this.isNearFocus(dot, focus, 420) && i % 5 !== 0) {
           continue;
         }
         if (normalDotBudget <= 0) {
@@ -1479,7 +1479,7 @@ class MultiplayerMatch {
           createdAt: item.createdAt,
         };
       }),
-      ufos: this.ufos.filter((item) => this.isNearFocus(item, focus, range + 180)).map(function (ufo) {
+      ufos: this.ufos.filter((item) => this.isNearFocus(item, focus, range + 160)).map(function (ufo) {
         return {
           type: ufo.type,
           x: ufo.x,

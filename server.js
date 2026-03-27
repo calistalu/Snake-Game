@@ -9,8 +9,8 @@ const HOST = process.env.HOST || "0.0.0.0";
 const PORT = Number(process.env.PORT || 3000);
 const ROOT = __dirname;
 const MATCH_TICK_MS = 50;
-const MATCH_BROADCAST_MS = 100;
-const APP_VERSION = "2026-03-27-online-fix2";
+const MATCH_BROADCAST_MS = 150;
+const APP_VERSION = "2026-03-27-online-fix3";
 
 const CONTENT_TYPES = {
   ".html": "text/html; charset=utf-8",
