@@ -11,7 +11,7 @@ const PORT = Number(process.env.PORT || 3000);
 const ROOT = __dirname;
 const MATCH_TICK_MS = 50;
 const MATCH_BROADCAST_MS = 50;
-const APP_VERSION = "2026-03-27-online-fix6";
+const APP_VERSION = "2026-03-27-online-fix7";
 
 const CONTENT_TYPES = {
   ".html": "text/html; charset=utf-8",

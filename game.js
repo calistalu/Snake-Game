@@ -581,14 +581,6 @@
       });
     }
 
-    cloneOnlineSnakePacket(snake) {
-      return Object.assign({}, snake, {
-        effects: Object.assign({}, snake.effects || {}),
-        trail: this.cloneOnlineTrail(snake.trail),
-        damageTexts: this.cloneOnlineDamageTexts(snake.damageTexts),
-      });
-    }
-
     applyOnlineEntityPatch(entries, patch) {
       if (!patch) {
         return entries || [];
@@ -630,31 +622,6 @@
       };
     }
 
-    materializeOnlineMatchStore() {
-      const store = this.multiplayer.matchStore;
-      if (!store) {
-        return null;
-      }
-      return {
-        phase: store.phase,
-        time: store.time,
-        roomCode: store.roomCode,
-        zoneTargets: store.zoneTargets,
-        chestEvents: store.chestEvents,
-        currentZone: store.currentZone,
-        incomingZone: store.incomingZone,
-        snakes: (store.snakes || []).map((snake) => this.cloneOnlineSnakePacket(snake)),
-        dots: store.dots || [],
-        items: store.items || [],
-        crates: store.crates || [],
-        ufos: store.ufos || [],
-        droplets: store.droplets || [],
-        missiles: store.missiles || [],
-        killFeed: store.killFeed || [],
-        summary: store.summary || null,
-      };
-    }
-
     applyOnlineMatchPacket(packet) {
       if (!packet) {
         return;
@@ -689,7 +656,11 @@
         if (Object.prototype.hasOwnProperty.call(packet, "summary")) {
           store.summary = packet.summary;
         }
-        store.snakes = this.applyOnlineEntityPatch(store.snakes, packet.snakes);
+        if (packet.snakes && Array.isArray(packet.snakes.upsert) && (!packet.snakes.remove || packet.snakes.remove.length === 0)) {
+          store.snakes = packet.snakes.upsert;
+        } else {
+          store.snakes = this.applyOnlineEntityPatch(store.snakes, packet.snakes);
+        }
         store.dots = this.applyOnlineEntityPatch(store.dots, packet.dots);
         store.items = this.applyOnlineEntityPatch(store.items, packet.items);
         store.crates = this.applyOnlineEntityPatch(store.crates, packet.crates);
@@ -698,25 +669,28 @@
         store.missiles = this.applyOnlineEntityPatch(store.missiles, packet.missiles);
       }
 
-      const snapshot = this.materializeOnlineMatchStore();
-      if (snapshot) {
-        this.applyOnlineMatchSnapshot(snapshot);
+      if (this.multiplayer.matchStore) {
+        this.applyOnlineMatchSnapshot(this.multiplayer.matchStore);
       }
     }
 
     mergeOnlineSnake(existingSnake, incomingSnake) {
       if (!existingSnake) {
-        incomingSnake.trail = this.cloneOnlineTrail(incomingSnake.trail);
-        incomingSnake.netX = incomingSnake.x;
-        incomingSnake.netY = incomingSnake.y;
-        incomingSnake.netAngle = incomingSnake.angle;
-        incomingSnake.netDesiredAngle = incomingSnake.desiredAngle;
-        incomingSnake.netTrail = this.cloneOnlineTrail(incomingSnake.trail);
-        incomingSnake.damageTexts = incomingSnake.damageTexts || [];
-        return incomingSnake;
+        return Object.assign({}, incomingSnake, {
+          effects: Object.assign({}, incomingSnake.effects || {}),
+          trail: this.cloneOnlineTrail(incomingSnake.trail),
+          netX: incomingSnake.x,
+          netY: incomingSnake.y,
+          netAngle: incomingSnake.angle,
+          netDesiredAngle: incomingSnake.desiredAngle,
+          netTrail: incomingSnake.trail || [],
+          damageTexts: incomingSnake.isPlayer
+            ? this.cloneOnlineDamageTexts(incomingSnake.damageTexts)
+            : [],
+        });
       }
 
-      const targetTrail = this.cloneOnlineTrail(incomingSnake.trail);
+      const targetTrail = incomingSnake.trail || [];
       existingSnake.netX = incomingSnake.x;
       existingSnake.netY = incomingSnake.y;
       existingSnake.netAngle = incomingSnake.angle;
@@ -736,11 +710,13 @@
       existingSnake.segmentCount = incomingSnake.segmentCount;
       existingSnake.missiles = incomingSnake.missiles;
       existingSnake.kills = incomingSnake.kills;
-      existingSnake.effects = incomingSnake.effects || existingSnake.effects;
+      existingSnake.effects = Object.assign({}, incomingSnake.effects || existingSnake.effects || {});
       existingSnake.bodyColor = incomingSnake.bodyColor;
       existingSnake.headColor = incomingSnake.headColor;
       existingSnake.textColor = incomingSnake.textColor;
-      existingSnake.damageTexts = incomingSnake.damageTexts || [];
+      existingSnake.damageTexts = incomingSnake.isPlayer
+        ? this.cloneOnlineDamageTexts(incomingSnake.damageTexts)
+        : [];
 
       if (
         distSq(existingSnake.x, existingSnake.y, incomingSnake.x, incomingSnake.y) >
@@ -1462,7 +1438,7 @@
       snake.radius = lerp(9, 30, Math.sqrt(hpRatio));
       snake.bodyLength = lerp(96, 1180, hpRatio);
       snake.pointSpacing = lerp(3.6, 5.2, hpRatio);
-      snake.segmentCount = clamp(Math.round(snake.bodyLength / 3.8), 18, 320);
+      snake.segmentCount = clamp(Math.round(snake.bodyLength / snake.pointSpacing), 18, 240);
       this.syncSnakeSegments(snake);
     }
 

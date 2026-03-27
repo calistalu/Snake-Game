@@ -395,7 +395,7 @@ class MultiplayerMatch {
     snake.radius = lerp(9, 30, Math.sqrt(hpRatio));
     snake.bodyLength = lerp(96, 1180, hpRatio);
     snake.pointSpacing = lerp(3.6, 5.2, hpRatio);
-    snake.segmentCount = clamp(Math.round(snake.bodyLength / 3.8), 18, 320);
+    snake.segmentCount = clamp(Math.round(snake.bodyLength / snake.pointSpacing), 18, 240);
     this.syncSnakeSegments(snake);
   }
 
@@ -1366,15 +1366,9 @@ class MultiplayerMatch {
     const includeTrail =
       snake.playerId === playerId ||
       this.isNearFocus(snake, focus, 760);
-    const step =
-      snake.playerId === playerId
-        ? 1
-        : snake.radius > 20
-          ? 7
-          : 6;
     const trail = [];
     if (includeTrail) {
-      for (let i = 0; i < snake.trail.length; i += step) {
+      for (let i = 0; i < snake.trail.length; i += 1) {
         trail.push({
           x: snake.trail[i].x,
           y: snake.trail[i].y,
