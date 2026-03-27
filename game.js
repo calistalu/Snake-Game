@@ -234,6 +234,7 @@
         playerId: "",
         socket: null,
         eventSource: null,
+        matchStore: null,
         matchActive: false,
         matchFetchInFlight: false,
         matchPollTimer: 0,
@@ -494,6 +495,7 @@
       this.multiplayer.eventSource = null;
       this.multiplayer.room = null;
       this.multiplayer.playerId = "";
+      this.multiplayer.matchStore = null;
       this.multiplayer.matchActive = false;
       this.multiplayer.matchFetchInFlight = false;
       if (this.multiplayer.matchPollTimer) {
@@ -543,7 +545,7 @@
           this.multiplayer.room = message.payload;
           this.renderOnlineRoom();
         } else if (message.type === "match") {
-          this.applyOnlineMatchSnapshot(message.payload);
+          this.applyOnlineMatchPacket(message.payload);
         } else if (message.type === "error") {
           onlineStatus.textContent = message.payload && message.payload.message
             ? message.payload.message
@@ -571,6 +573,135 @@
           y: point.y,
         };
       });
+    }
+
+    cloneOnlineDamageTexts(entries) {
+      return (entries || []).map(function (entry) {
+        return Object.assign({}, entry);
+      });
+    }
+
+    cloneOnlineSnakePacket(snake) {
+      return Object.assign({}, snake, {
+        effects: Object.assign({}, snake.effects || {}),
+        trail: this.cloneOnlineTrail(snake.trail),
+        damageTexts: this.cloneOnlineDamageTexts(snake.damageTexts),
+      });
+    }
+
+    applyOnlineEntityPatch(entries, patch) {
+      if (!patch) {
+        return entries || [];
+      }
+      const currentEntries = entries || [];
+      const byId = new Map();
+      for (let i = 0; i < currentEntries.length; i += 1) {
+        byId.set(currentEntries[i].id, currentEntries[i]);
+      }
+      const removals = patch.remove || [];
+      for (let i = 0; i < removals.length; i += 1) {
+        byId.delete(removals[i]);
+      }
+      const upserts = patch.upsert || [];
+      for (let i = 0; i < upserts.length; i += 1) {
+        byId.set(upserts[i].id, upserts[i]);
+      }
+      return Array.from(byId.values());
+    }
+
+    createOnlineMatchStoreFromFull(snapshot) {
+      return {
+        phase: snapshot.phase || "playing",
+        time: snapshot.time || 0,
+        roomCode: snapshot.roomCode || "",
+        zoneTargets: snapshot.zoneTargets || [],
+        chestEvents: snapshot.chestEvents || [],
+        currentZone: snapshot.currentZone || null,
+        incomingZone: snapshot.incomingZone || null,
+        snakes: snapshot.snakes || [],
+        dots: snapshot.dots || [],
+        items: snapshot.items || [],
+        crates: snapshot.crates || [],
+        ufos: snapshot.ufos || [],
+        droplets: snapshot.droplets || [],
+        missiles: snapshot.missiles || [],
+        killFeed: snapshot.killFeed || [],
+        summary: snapshot.summary || null,
+      };
+    }
+
+    materializeOnlineMatchStore() {
+      const store = this.multiplayer.matchStore;
+      if (!store) {
+        return null;
+      }
+      return {
+        phase: store.phase,
+        time: store.time,
+        roomCode: store.roomCode,
+        zoneTargets: store.zoneTargets,
+        chestEvents: store.chestEvents,
+        currentZone: store.currentZone,
+        incomingZone: store.incomingZone,
+        snakes: (store.snakes || []).map((snake) => this.cloneOnlineSnakePacket(snake)),
+        dots: store.dots || [],
+        items: store.items || [],
+        crates: store.crates || [],
+        ufos: store.ufos || [],
+        droplets: store.droplets || [],
+        missiles: store.missiles || [],
+        killFeed: store.killFeed || [],
+        summary: store.summary || null,
+      };
+    }
+
+    applyOnlineMatchPacket(packet) {
+      if (!packet) {
+        return;
+      }
+
+      if (!packet.mode || packet.mode === "full") {
+        this.multiplayer.matchStore = this.createOnlineMatchStoreFromFull(packet);
+      } else {
+        if (!this.multiplayer.matchStore) {
+          this.fetchOnlineMatchSnapshot();
+          return;
+        }
+        const store = this.multiplayer.matchStore;
+        store.phase = packet.phase || store.phase;
+        store.time = typeof packet.time === "number" ? packet.time : store.time;
+        store.roomCode = packet.roomCode || store.roomCode;
+        if (packet.zoneTargets) {
+          store.zoneTargets = packet.zoneTargets;
+        }
+        if (packet.chestEvents) {
+          store.chestEvents = packet.chestEvents;
+        }
+        if (packet.currentZone) {
+          store.currentZone = packet.currentZone;
+        }
+        if (packet.incomingZone) {
+          store.incomingZone = packet.incomingZone;
+        }
+        if (packet.killFeed) {
+          store.killFeed = packet.killFeed;
+        }
+        if (Object.prototype.hasOwnProperty.call(packet, "summary")) {
+          store.summary = packet.summary;
+        }
+        store.snakes = this.applyOnlineEntityPatch(store.snakes, packet.snakes);
+        store.dots = this.applyOnlineEntityPatch(store.dots, packet.dots);
+        store.items = this.applyOnlineEntityPatch(store.items, packet.items);
+        store.crates = this.applyOnlineEntityPatch(store.crates, packet.crates);
+        store.ufos = this.applyOnlineEntityPatch(store.ufos, packet.ufos);
+        store.droplets = this.applyOnlineEntityPatch(store.droplets, packet.droplets);
+        store.missiles = this.applyOnlineEntityPatch(store.missiles, packet.missiles);
+      }
+
+      const snapshot = this.materializeOnlineMatchStore();
+      if (snapshot) {
+        this.applyOnlineMatchSnapshot(snapshot);
+      }
     }
 
     mergeOnlineSnake(existingSnake, incomingSnake) {
@@ -659,11 +790,6 @@
     }
 
     applyOnlineMatchSnapshot(snapshot) {
-      console.log("[online:match]", {
-        phase: snapshot.phase,
-        time: snapshot.time,
-        snakes: snapshot.snakes ? snapshot.snakes.length : 0,
-      });
       const wasActive = this.multiplayer.matchActive;
       const wasFinished = this.finished;
       this.selectedMode = "online";
@@ -958,8 +1084,14 @@
             encodeURIComponent(this.multiplayer.playerId)
         );
         if (payload && payload.match) {
-          console.log("[online:match-fetch]", payload.match.phase, payload.match.time);
-          this.applyOnlineMatchSnapshot(payload.match);
+          this.applyOnlineMatchPacket(
+            Object.assign(
+              {
+                mode: "full",
+              },
+              payload.match
+            )
+          );
         }
       } catch (_error) {
         if (this.multiplayer.room && this.multiplayer.room.phase === "playing") {

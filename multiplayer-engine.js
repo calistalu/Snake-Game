@@ -113,6 +113,7 @@ class MultiplayerMatch {
     this.roomCode = room.code;
     this.time = 0;
     this.finished = false;
+    this.nextEntityId = 1;
     this.nextCrateSpawn = 5;
     this.nextUfoSpawn = 10;
     this.zoneTargets = this.generateZoneTargets();
@@ -144,6 +145,12 @@ class MultiplayerMatch {
       this.snakes.push(this.createSnake(index, null));
       index += 1;
     }
+  }
+
+  allocateEntityId(prefix) {
+    const id = prefix + "-" + this.nextEntityId;
+    this.nextEntityId += 1;
+    return id;
   }
 
   generateZoneTargets() {
@@ -246,6 +253,7 @@ class MultiplayerMatch {
     const zone = this.zoneTargets[0];
     const pos = origin || this.randomPositionInZone(zone, 30);
     return {
+      id: this.allocateEntityId(isWreck ? "wreck" : "dot"),
       x: pos.x,
       y: pos.y,
       value: value || CONFIG.dotValue,
@@ -260,6 +268,7 @@ class MultiplayerMatch {
 
   createItem(type, x, y) {
     return {
+      id: this.allocateEntityId(type),
       type: type,
       x: x,
       y: y,
@@ -275,6 +284,7 @@ class MultiplayerMatch {
   createCrate() {
     const pos = this.randomPositionInZone(this.getCurrentZone(this.time), 120);
     return {
+      id: this.allocateEntityId("crate"),
       x: pos.x,
       y: pos.y,
       radius: 26,
@@ -288,6 +298,7 @@ class MultiplayerMatch {
   createUfo() {
     const pos = this.randomPositionInZone(this.getCurrentZone(this.time), 160);
     return {
+      id: this.allocateEntityId("ufo"),
       x: pos.x,
       y: pos.y,
       radius: 34,
@@ -304,6 +315,7 @@ class MultiplayerMatch {
 
   createChest(position) {
     return {
+      id: this.allocateEntityId("chest"),
       x: position.x,
       y: position.y,
       radius: 54,
@@ -570,6 +582,7 @@ class MultiplayerMatch {
     snake.missiles -= 1;
     const distanceAhead = 86 + snake.radius;
     this.missiles.push({
+      id: this.allocateEntityId("missile"),
       x: snake.x + Math.cos(snake.angle) * distanceAhead,
       y: snake.y + Math.sin(snake.angle) * distanceAhead,
       ownerId: snake.id,
@@ -730,8 +743,9 @@ class MultiplayerMatch {
     for (let i = 0; i < count; i += 1) {
       const angle = (i / count) * TAU;
       const speed = rand(88, 108);
-      this.droplets.push({
-        x: ufo.x,
+        this.droplets.push({
+          id: this.allocateEntityId("droplet"),
+          x: ufo.x,
         y: ufo.y,
         vx: Math.cos(angle) * speed,
         vy: Math.sin(angle) * speed,
@@ -1405,6 +1419,194 @@ class MultiplayerMatch {
     };
   }
 
+  stampEntitySignature(entity, signature) {
+    Object.defineProperty(entity, "_sig", {
+      value: signature,
+      enumerable: false,
+      configurable: true,
+    });
+    return entity;
+  }
+
+  serializeDot(dot) {
+    return this.stampEntitySignature(
+      {
+        id: dot.id,
+        x: dot.x,
+        y: dot.y,
+        value: dot.value,
+        radius: dot.radius,
+        color: dot.color,
+        alpha: dot.alpha,
+        kind: dot.kind,
+      },
+      [
+        dot.id,
+        dot.x,
+        dot.y,
+        dot.value,
+        dot.radius,
+        dot.color,
+        dot.alpha,
+        dot.kind,
+      ].join("|")
+    );
+  }
+
+  serializeItem(item) {
+    return this.stampEntitySignature(
+      {
+        id: item.id,
+        type: item.type,
+        x: item.x,
+        y: item.y,
+        radius: item.radius,
+        seed: item.seed,
+        protectedUntil: item.protectedUntil,
+        ttl: item.ttl,
+      },
+      [
+        item.id,
+        item.type,
+        item.x,
+        item.y,
+        item.radius,
+        item.seed,
+        item.protectedUntil,
+        item.ttl,
+      ].join("|")
+    );
+  }
+
+  serializeCrate(item) {
+    return this.stampEntitySignature(
+      {
+        id: item.id,
+        type: item.type,
+        x: item.x,
+        y: item.y,
+        radius: item.radius,
+        hp: item.hp,
+        createdAt: item.createdAt,
+      },
+      [
+        item.id,
+        item.type,
+        item.x,
+        item.y,
+        item.radius,
+        item.hp,
+        item.createdAt,
+      ].join("|")
+    );
+  }
+
+  serializeUfo(ufo) {
+    return this.stampEntitySignature(
+      {
+        id: ufo.id,
+        type: ufo.type,
+        x: ufo.x,
+        y: ufo.y,
+        radius: ufo.radius,
+        hp: ufo.hp,
+        seed: ufo.seed,
+      },
+      [
+        ufo.id,
+        ufo.type,
+        ufo.x,
+        ufo.y,
+        ufo.radius,
+        ufo.hp,
+        ufo.seed,
+      ].join("|")
+    );
+  }
+
+  serializeDroplet(drop) {
+    return this.stampEntitySignature(
+      {
+        id: drop.id,
+        x: drop.x,
+        y: drop.y,
+        radius: drop.radius,
+        ttl: drop.ttl,
+        totalTtl: drop.totalTtl,
+      },
+      [drop.id, drop.x, drop.y, drop.radius, drop.ttl, drop.totalTtl].join("|")
+    );
+  }
+
+  serializeMissile(missile) {
+    return this.stampEntitySignature(
+      {
+        id: missile.id,
+        x: missile.x,
+        y: missile.y,
+        ownerId: missile.ownerId,
+        ttl: missile.ttl,
+        totalLife: missile.totalLife,
+        radius: missile.radius,
+        color: missile.color,
+      },
+      [
+        missile.id,
+        missile.x,
+        missile.y,
+        missile.ownerId,
+        missile.ttl,
+        missile.totalLife,
+        missile.radius,
+        missile.color,
+      ].join("|")
+    );
+  }
+
+  serializeChestEvent(event) {
+    return {
+      announce: event.announce,
+      spawn: event.spawn,
+      count: event.count,
+      previewPositions: event.previewPositions,
+      announced: event.announced,
+      spawned: event.spawned,
+      zoneIndex: event.zoneIndex,
+    };
+  }
+
+  createEntityDelta(previousEntries, nextEntries) {
+    const previousMap = new Map();
+    const nextMap = new Map();
+    const upsert = [];
+    const remove = [];
+
+    for (let i = 0; i < previousEntries.length; i += 1) {
+      previousMap.set(previousEntries[i].id, previousEntries[i]);
+    }
+
+    for (let i = 0; i < nextEntries.length; i += 1) {
+      const entity = nextEntries[i];
+      nextMap.set(entity.id, entity);
+      const previous = previousMap.get(entity.id);
+      if (!previous || previous._sig !== entity._sig) {
+        upsert.push(entity);
+      }
+    }
+
+    for (let i = 0; i < previousEntries.length; i += 1) {
+      const entity = previousEntries[i];
+      if (!nextMap.has(entity.id)) {
+        remove.push(entity.id);
+      }
+    }
+
+    return {
+      upsert: upsert,
+      remove: remove,
+    };
+  }
+
   createSnapshotFor(playerId) {
     const focus = this.getSpectatorTarget(playerId);
     const range = 700;
@@ -1427,15 +1629,7 @@ class MultiplayerMatch {
         }
         normalDotBudget -= 1;
       }
-      dots.push({
-        x: dot.x,
-        y: dot.y,
-        value: dot.value,
-        radius: dot.radius,
-        color: dot.color,
-        alpha: dot.alpha,
-        kind: dot.kind,
-      });
+      dots.push(this.serializeDot(dot));
     }
 
     return {
@@ -1443,72 +1637,26 @@ class MultiplayerMatch {
       time: this.time,
       roomCode: this.roomCode,
       zoneTargets: this.zoneTargets,
-      chestEvents: this.chestEvents.map(function (event) {
-        return {
-          announce: event.announce,
-          spawn: event.spawn,
-          count: event.count,
-          previewPositions: event.previewPositions,
-          announced: event.announced,
-          spawned: event.spawned,
-          zoneIndex: event.zoneIndex,
-        };
-      }),
+      chestEvents: this.chestEvents.map((event) => this.serializeChestEvent(event)),
       currentZone: zone,
       incomingZone: incoming,
       snakes: this.snakes.map((snake) => this.serializeSnake(snake, playerId, focus)),
       dots: dots,
-      items: this.items.filter((item) => this.isNearFocus(item, focus, range)).map(function (item) {
-        return {
-          type: item.type,
-          x: item.x,
-          y: item.y,
-          radius: item.radius,
-          seed: item.seed,
-          protectedUntil: item.protectedUntil,
-          ttl: item.ttl,
-        };
-      }),
-      crates: this.crates.filter((item) => this.isNearFocus(item, focus, range + 160)).map(function (item) {
-        return {
-          type: item.type,
-          x: item.x,
-          y: item.y,
-          radius: item.radius,
-          hp: item.hp,
-          createdAt: item.createdAt,
-        };
-      }),
-      ufos: this.ufos.filter((item) => this.isNearFocus(item, focus, range + 160)).map(function (ufo) {
-        return {
-          type: ufo.type,
-          x: ufo.x,
-          y: ufo.y,
-          radius: ufo.radius,
-          hp: ufo.hp,
-          seed: ufo.seed,
-        };
-      }),
-      droplets: this.droplets.filter((item) => this.isNearFocus(item, focus, range)).map(function (drop) {
-        return {
-          x: drop.x,
-          y: drop.y,
-          radius: drop.radius,
-          ttl: drop.ttl,
-          totalTtl: drop.totalTtl,
-        };
-      }),
-      missiles: this.missiles.filter((item) => this.isNearFocus(item, focus, range)).map(function (missile) {
-        return {
-          x: missile.x,
-          y: missile.y,
-          ownerId: missile.ownerId,
-          ttl: missile.ttl,
-          totalLife: missile.totalLife,
-          radius: missile.radius,
-          color: missile.color,
-        };
-      }),
+      items: this.items
+        .filter((item) => this.isNearFocus(item, focus, range))
+        .map((item) => this.serializeItem(item)),
+      crates: this.crates
+        .filter((item) => this.isNearFocus(item, focus, range + 160))
+        .map((item) => this.serializeCrate(item)),
+      ufos: this.ufos
+        .filter((item) => this.isNearFocus(item, focus, range + 160))
+        .map((ufo) => this.serializeUfo(ufo)),
+      droplets: this.droplets
+        .filter((item) => this.isNearFocus(item, focus, range))
+        .map((drop) => this.serializeDroplet(drop)),
+      missiles: this.missiles
+        .filter((item) => this.isNearFocus(item, focus, range))
+        .map((missile) => this.serializeMissile(missile)),
       killFeed: this.killFeed.slice(),
       summary: this.winner
         ? {
@@ -1519,6 +1667,53 @@ class MultiplayerMatch {
             kills: this.winner.kills,
           }
         : null,
+    };
+  }
+
+  createSyncPacket(playerId, syncState) {
+    const snapshot = this.createSnapshotFor(playerId);
+    const sequence = syncState && typeof syncState.sequence === "number"
+      ? syncState.sequence + 1
+      : 1;
+    const previousSnapshot = syncState && syncState.snapshot ? syncState.snapshot : null;
+    const shouldSendFull = !previousSnapshot || sequence % 60 === 0;
+
+    if (shouldSendFull) {
+      return {
+        packet: Object.assign({ mode: "full" }, snapshot),
+        syncState: {
+          sequence: sequence,
+          snapshot: snapshot,
+        },
+      };
+    }
+
+    return {
+      packet: {
+        mode: "delta",
+        phase: snapshot.phase,
+        time: snapshot.time,
+        roomCode: snapshot.roomCode,
+        currentZone: snapshot.currentZone,
+        incomingZone: snapshot.incomingZone,
+        chestEvents: snapshot.chestEvents,
+        killFeed: snapshot.killFeed,
+        summary: snapshot.summary,
+        snakes: {
+          upsert: snapshot.snakes,
+          remove: [],
+        },
+        dots: this.createEntityDelta(previousSnapshot.dots, snapshot.dots),
+        items: this.createEntityDelta(previousSnapshot.items, snapshot.items),
+        crates: this.createEntityDelta(previousSnapshot.crates, snapshot.crates),
+        ufos: this.createEntityDelta(previousSnapshot.ufos, snapshot.ufos),
+        droplets: this.createEntityDelta(previousSnapshot.droplets, snapshot.droplets),
+        missiles: this.createEntityDelta(previousSnapshot.missiles, snapshot.missiles),
+      },
+      syncState: {
+        sequence: sequence,
+        snapshot: snapshot,
+      },
     };
   }
 }

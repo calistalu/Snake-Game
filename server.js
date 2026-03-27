@@ -10,8 +10,8 @@ const HOST = process.env.HOST || "0.0.0.0";
 const PORT = Number(process.env.PORT || 3000);
 const ROOT = __dirname;
 const MATCH_TICK_MS = 50;
-const MATCH_BROADCAST_MS = 150;
-const APP_VERSION = "2026-03-27-online-fix5";
+const MATCH_BROADCAST_MS = 50;
+const APP_VERSION = "2026-03-27-online-fix6";
 
 const CONTENT_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -144,10 +144,22 @@ function broadcastMatch(room) {
     sendSse(stream.res, "match", room.match.createSnapshotFor(stream.playerId));
   });
   room.sockets.forEach((socket) => {
-    if (!socket.playerId) {
-      return;
-    }
-    sendWs(socket, "match", room.match.createSnapshotFor(socket.playerId));
+    sendMatchToSocket(room, socket);
+  });
+}
+
+function sendMatchToSocket(room, socket) {
+  if (!room.match || !socket || !socket.playerId) {
+    return;
+  }
+  const result = room.match.createSyncPacket(socket.playerId, socket.matchSync || null);
+  socket.matchSync = result.syncState;
+  sendWs(socket, "match", result.packet);
+}
+
+function resetRoomSocketSync(room) {
+  room.sockets.forEach((socket) => {
+    socket.matchSync = null;
   });
 }
 
@@ -427,6 +439,7 @@ async function handleApi(req, res, pathname) {
     room.message = "联机战斗进行中";
     room.match = new MultiplayerMatch(room);
     room.lastMatchBroadcastAt = 0;
+    resetRoomSocketSync(room);
     console.log(
       `[room:start] code=${room.code} host=${player.id} players=${room.players.length} version=${APP_VERSION}`
     );
@@ -543,6 +556,7 @@ const wss = new WebSocketServer({ noServer: true });
 wss.on("connection", (socket) => {
   socket.roomCode = "";
   socket.playerId = "";
+  socket.matchSync = null;
 
   socket.on("message", (raw) => {
     let message = null;
@@ -566,12 +580,13 @@ wss.on("connection", (socket) => {
       }
       socket.roomCode = room.code;
       socket.playerId = player.id;
+      socket.matchSync = null;
       room.sockets.add(socket);
       player.connected = true;
       console.log(`[ws:hello] code=${room.code} playerId=${player.id} phase=${room.phase}`);
       sendWs(socket, "room", roomSnapshot(room));
       if (room.match) {
-        sendWs(socket, "match", room.match.createSnapshotFor(player.id));
+        sendMatchToSocket(room, socket);
       }
       broadcastRoom(room);
       return;
