@@ -3,6 +3,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { randomUUID } = require("crypto");
+const { WebSocketServer } = require("ws");
 const { MultiplayerMatch } = require("./multiplayer-engine");
 
 const HOST = process.env.HOST || "0.0.0.0";
@@ -10,7 +11,7 @@ const PORT = Number(process.env.PORT || 3000);
 const ROOT = __dirname;
 const MATCH_TICK_MS = 50;
 const MATCH_BROADCAST_MS = 150;
-const APP_VERSION = "2026-03-27-online-fix4";
+const APP_VERSION = "2026-03-27-online-fix5";
 
 const CONTENT_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -25,6 +26,7 @@ const CONTENT_TYPES = {
 };
 
 const rooms = new Map();
+const WS_OPEN = 1;
 
 function setCorsHeaders(target) {
   target["Access-Control-Allow-Origin"] = "*";
@@ -63,6 +65,18 @@ function sendJson(res, statusCode, payload) {
 function sendSse(res, event, payload) {
   res.write(`event: ${event}\n`);
   res.write(`data: ${JSON.stringify(payload)}\n\n`);
+}
+
+function sendWs(socket, type, payload) {
+  if (!socket || socket.readyState !== WS_OPEN) {
+    return;
+  }
+  socket.send(
+    JSON.stringify({
+      type: type,
+      payload: payload,
+    })
+  );
 }
 
 function parseBody(req) {
@@ -114,6 +128,9 @@ function broadcastRoom(room) {
   room.streams.forEach((stream) => {
     sendSse(stream.res, "room", snapshot);
   });
+  room.sockets.forEach((socket) => {
+    sendWs(socket, "room", snapshot);
+  });
 }
 
 function broadcastMatch(room) {
@@ -125,6 +142,12 @@ function broadcastMatch(room) {
       return;
     }
     sendSse(stream.res, "match", room.match.createSnapshotFor(stream.playerId));
+  });
+  room.sockets.forEach((socket) => {
+    if (!socket.playerId) {
+      return;
+    }
+    sendWs(socket, "match", room.match.createSnapshotFor(socket.playerId));
   });
 }
 
@@ -163,9 +186,22 @@ function requirePlayer(room, playerId, res) {
 }
 
 function cleanupRoom(room) {
-  if (room.players.length === 0 && room.streams.size === 0) {
+  if (room.players.length === 0 && room.streams.size === 0 && room.sockets.size === 0) {
     rooms.delete(room.code);
   }
+}
+
+function roomHasSocketForPlayer(room, playerId, ignoredSocket) {
+  for (const socket of room.sockets) {
+    if (
+      socket !== ignoredSocket &&
+      socket.playerId === playerId &&
+      socket.readyState === WS_OPEN
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function tickMatches() {
@@ -228,6 +264,7 @@ async function handleApi(req, res, pathname) {
       message: "等待玩家加入",
       players: [player],
       streams: new Set(),
+      sockets: new Set(),
       match: null,
       lastMatchBroadcastAt: 0,
     };
@@ -499,6 +536,92 @@ const server = http.createServer(async (req, res) => {
   } catch (error) {
     sendJson(res, 500, { error: "服务器异常", detail: error.message });
   }
+});
+
+const wss = new WebSocketServer({ noServer: true });
+
+wss.on("connection", (socket) => {
+  socket.roomCode = "";
+  socket.playerId = "";
+
+  socket.on("message", (raw) => {
+    let message = null;
+    try {
+      message = JSON.parse(String(raw));
+    } catch (_error) {
+      sendWs(socket, "error", { message: "消息不是合法 JSON" });
+      return;
+    }
+
+    if (message.type === "hello") {
+      const room = getRoom(message.roomCode);
+      if (!room) {
+        sendWs(socket, "error", { message: "房间不存在" });
+        return;
+      }
+      const player = room.players.find((entry) => entry.id === message.playerId);
+      if (!player) {
+        sendWs(socket, "error", { message: "玩家不存在" });
+        return;
+      }
+      socket.roomCode = room.code;
+      socket.playerId = player.id;
+      room.sockets.add(socket);
+      player.connected = true;
+      console.log(`[ws:hello] code=${room.code} playerId=${player.id} phase=${room.phase}`);
+      sendWs(socket, "room", roomSnapshot(room));
+      if (room.match) {
+        sendWs(socket, "match", room.match.createSnapshotFor(player.id));
+      }
+      broadcastRoom(room);
+      return;
+    }
+
+    if (message.type === "input") {
+      const room = getRoom(message.roomCode || socket.roomCode);
+      if (!room || !room.match) {
+        return;
+      }
+      const playerId = message.playerId || socket.playerId;
+      const player = room.players.find((entry) => entry.id === playerId);
+      if (!player) {
+        return;
+      }
+      room.match.setPlayerInput(player.id, message.input || {});
+      return;
+    }
+  });
+
+  socket.on("close", () => {
+    const room = getRoom(socket.roomCode);
+    if (!room) {
+      return;
+    }
+    room.sockets.delete(socket);
+    console.log(`[ws:close] code=${room.code} playerId=${socket.playerId || "unknown"} phase=${room.phase}`);
+    if (socket.playerId && !roomHasSocketForPlayer(room, socket.playerId, socket)) {
+      const player = room.players.find((entry) => entry.id === socket.playerId);
+      if (player) {
+        player.connected = false;
+        if (room.match) {
+          room.match.clearPlayerInput(player.id);
+        }
+        broadcastRoom(room);
+      }
+    }
+    cleanupRoom(room);
+  });
+});
+
+server.on("upgrade", (req, socket, head) => {
+  const pathname = new URL(req.url, `http://${req.headers.host}`).pathname;
+  if (pathname !== "/ws") {
+    socket.destroy();
+    return;
+  }
+  wss.handleUpgrade(req, socket, head, (ws) => {
+    wss.emit("connection", ws, req);
+  });
 });
 
 setInterval(tickMatches, MATCH_TICK_MS);

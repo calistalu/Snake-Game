@@ -232,6 +232,7 @@
         serverUrl: "",
         room: null,
         playerId: "",
+        socket: null,
         eventSource: null,
         matchActive: false,
         matchFetchInFlight: false,
@@ -450,6 +451,17 @@
       return (serverUrlInput.value.trim() || this.defaultServerUrl()).replace(/\/+$/, "");
     }
 
+    getOnlineSocketUrl() {
+      const base = this.getOnlineServerUrl();
+      if (base.startsWith("https://")) {
+        return "wss://" + base.slice(8) + "/ws";
+      }
+      if (base.startsWith("http://")) {
+        return "ws://" + base.slice(7) + "/ws";
+      }
+      return base + "/ws";
+    }
+
     getOnlinePlayerName() {
       return (playerNameInput.value.trim() || "Pilot-" + Math.floor(rand(100, 999))).slice(0, 18);
     }
@@ -472,6 +484,10 @@
     }
 
     resetOnlineRoomState() {
+      if (this.multiplayer.socket) {
+        this.multiplayer.socket.close();
+      }
+      this.multiplayer.socket = null;
       if (this.multiplayer.eventSource) {
         this.multiplayer.eventSource.close();
       }
@@ -495,29 +511,49 @@
     }
 
     subscribeOnlineRoom(code, playerId) {
+      if (this.multiplayer.socket) {
+        this.multiplayer.socket.close();
+      }
       if (this.multiplayer.eventSource) {
         this.multiplayer.eventSource.close();
       }
-      const source = new EventSource(
-        this.getOnlineServerUrl() +
-          "/api/rooms/" +
-          encodeURIComponent(code) +
-          "/events?playerId=" +
-          encodeURIComponent(playerId)
-      );
-      this.multiplayer.eventSource = source;
-      source.addEventListener("room", (event) => {
-        const payload = JSON.parse(event.data);
-        this.multiplayer.room = payload;
-        this.renderOnlineRoom();
+      this.multiplayer.eventSource = null;
+
+      const socket = new WebSocket(this.getOnlineSocketUrl());
+      this.multiplayer.socket = socket;
+
+      socket.addEventListener("open", () => {
+        socket.send(
+          JSON.stringify({
+            type: "hello",
+            roomCode: code,
+            playerId: playerId,
+          })
+        );
       });
-      source.addEventListener("match", (event) => {
-        const payload = JSON.parse(event.data);
-        this.applyOnlineMatchSnapshot(payload);
+
+      socket.addEventListener("message", (event) => {
+        let message = null;
+        try {
+          message = JSON.parse(event.data);
+        } catch (_error) {
+          return;
+        }
+        if (message.type === "room") {
+          this.multiplayer.room = message.payload;
+          this.renderOnlineRoom();
+        } else if (message.type === "match") {
+          this.applyOnlineMatchSnapshot(message.payload);
+        } else if (message.type === "error") {
+          onlineStatus.textContent = message.payload && message.payload.message
+            ? message.payload.message
+            : "联机连接异常";
+        }
       });
-      source.onerror = () => {
+
+      socket.addEventListener("close", () => {
         onlineStatus.textContent = "联机流已断开，请重新连接房间";
-      };
+      });
     }
 
     primeOnlineMessageState(time) {
@@ -810,6 +846,17 @@
 
       this.multiplayer.lastInputSentAt = now;
       this.multiplayer.lastInputSignature = signature;
+      if (this.multiplayer.socket && this.multiplayer.socket.readyState === WebSocket.OPEN) {
+        this.multiplayer.socket.send(
+          JSON.stringify({
+            type: "input",
+            roomCode: this.multiplayer.room.code,
+            playerId: this.multiplayer.playerId,
+            input: state,
+          })
+        );
+        return;
+      }
       fetch(
         this.getOnlineServerUrl() +
           "/api/rooms/" +

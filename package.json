@@ -2,6 +2,9 @@
   "name": "space-snake-crisis",
   "private": true,
   "version": "0.1.0",
+  "dependencies": {
+    "ws": "^8.18.3"
+  },
   "scripts": {
     "start": "node server.js"
   }
