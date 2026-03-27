@@ -233,6 +233,10 @@
         room: null,
         playerId: "",
         eventSource: null,
+        matchActive: false,
+        lastInputSentAt: 0,
+        lastInputSignature: "",
+        fireSeq: 0,
       };
       this.setupEvents();
       this.restart(true);
@@ -264,7 +268,12 @@
         }
         if (event.code === "Space" && self.state === "playing") {
           event.preventDefault();
-          self.fireMissile(self.player);
+          if (self.selectedMode === "online" && self.multiplayer.matchActive) {
+            self.multiplayer.fireSeq += 1;
+            self.sendOnlineInput(true);
+          } else {
+            self.fireMissile(self.player);
+          }
         }
         if (key === "r") {
           self.restartSelectedMode();
@@ -402,7 +411,7 @@
 
     previewMultiplayerMode() {
       this.selectedMode = "online";
-      modeHint.textContent = "联机：创建或加入房间，实时同步大厅状态。";
+      modeHint.textContent = "联机：创建或加入房间，由服务器统一结算战斗。";
       onlinePanel.classList.remove("hidden");
       serverUrlInput.value = serverUrlInput.value || this.defaultServerUrl();
       playerNameInput.value = playerNameInput.value || "Pilot-" + Math.floor(rand(100, 999));
@@ -466,6 +475,10 @@
       this.multiplayer.eventSource = null;
       this.multiplayer.room = null;
       this.multiplayer.playerId = "";
+      this.multiplayer.matchActive = false;
+      this.multiplayer.lastInputSentAt = 0;
+      this.multiplayer.lastInputSignature = "";
+      this.multiplayer.fireSeq = 0;
       roomPanel.classList.add("hidden");
       roomCodeLabel.textContent = "----";
       roomPhaseLabel.textContent = "大厅";
@@ -489,9 +502,147 @@
         this.multiplayer.room = payload;
         this.renderOnlineRoom();
       });
+      source.addEventListener("match", (event) => {
+        const payload = JSON.parse(event.data);
+        this.applyOnlineMatchSnapshot(payload);
+      });
       source.onerror = () => {
         onlineStatus.textContent = "联机流已断开，请重新连接房间";
       };
+    }
+
+    primeOnlineMessageState(time) {
+      this.messageState = this.messageState || {};
+      for (let i = 0; i < CONFIG.phaseStarts.length; i += 1) {
+        const warnTime = CONFIG.phaseStarts[i] - CONFIG.phaseWarningLead;
+        this.messageState["phaseWarn" + i] = time >= warnTime;
+      }
+    }
+
+    applyOnlineMatchSnapshot(snapshot) {
+      const wasActive = this.multiplayer.matchActive;
+      const wasFinished = this.finished;
+      this.selectedMode = "online";
+      this.multiplayer.matchActive = true;
+      this.time = snapshot.time || 0;
+      this.zoneTargets = snapshot.zoneTargets || this.zoneTargets;
+      this.chestEvents = snapshot.chestEvents || [];
+      this.snakes = (snapshot.snakes || []).map(function (snake) {
+        snake.trail = snake.trail || [];
+        snake.damageTexts = snake.damageTexts || [];
+        return snake;
+      });
+      this.dots = snapshot.dots || [];
+      this.items = snapshot.items || [];
+      this.crates = snapshot.crates || [];
+      this.ufos = snapshot.ufos || [];
+      this.droplets = snapshot.droplets || [];
+      this.missiles = snapshot.missiles || [];
+      this.killFeed = snapshot.killFeed || [];
+      this.finished = snapshot.phase === "finished";
+      this.state = this.finished ? "gameover" : "playing";
+      this.player =
+        this.snakes.find((snake) => snake.isPlayer) ||
+        this.player ||
+        this.snakes[0] ||
+        null;
+      this.matchSummary = snapshot.summary || null;
+
+      if (!wasActive) {
+        this.primeOnlineMessageState(this.time);
+      }
+
+      startScreen.classList.add("hidden");
+      overlay.classList.add("hidden");
+      this.hideOnlinePanel(true);
+      this.handlePhaseMessages(
+        snapshot.currentZone || this.getCurrentZone(this.time),
+        snapshot.incomingZone || this.getIncomingZone(this.time)
+      );
+
+      if (!wasActive) {
+        this.sendOnlineInput(true);
+      }
+
+      if (this.finished && !wasFinished) {
+        this.showOnlineMatchResult(snapshot.summary);
+      }
+    }
+
+    showOnlineMatchResult(summary) {
+      overlay.classList.remove("hidden");
+      if (summary && summary.playerId === this.multiplayer.playerId) {
+        overlayTitle.textContent = "你是最后赢家";
+        overlayBody.innerHTML =
+          "终局生命值：" +
+          Math.round(summary.hp) +
+          "<br>击杀：" +
+          summary.kills +
+          "<br>联机战斗中活到了最后。";
+      } else if (summary) {
+        overlayTitle.textContent = "最终胜者：" + summary.id;
+        overlayBody.innerHTML =
+          "你的蛇已被淘汰。<br>冠军生命值：" +
+          Math.round(summary.hp) +
+          "<br>冠军击杀：" +
+          summary.kills;
+      } else {
+        overlayTitle.textContent = "全员覆灭";
+        overlayBody.textContent = "这局里没有蛇活到最后。";
+      }
+    }
+
+    buildOnlineInputState() {
+      return {
+        up: input.up,
+        down: input.down,
+        left: input.left,
+        right: input.right,
+        boost: input.boost,
+        fireSeq: this.multiplayer.fireSeq,
+      };
+    }
+
+    sendOnlineInput(force) {
+      if (
+        !this.multiplayer.matchActive ||
+        !this.multiplayer.room ||
+        !this.multiplayer.playerId ||
+        !this.getOnlineServerUrl()
+      ) {
+        return;
+      }
+      const state = this.buildOnlineInputState();
+      const signature = JSON.stringify(state);
+      const now = performance.now();
+      if (
+        !force &&
+        signature === this.multiplayer.lastInputSignature &&
+        now - this.multiplayer.lastInputSentAt < 120
+      ) {
+        return;
+      }
+
+      this.multiplayer.lastInputSentAt = now;
+      this.multiplayer.lastInputSignature = signature;
+      fetch(
+        this.getOnlineServerUrl() +
+          "/api/rooms/" +
+          encodeURIComponent(this.multiplayer.room.code) +
+          "/input",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            playerId: this.multiplayer.playerId,
+            input: state,
+          }),
+        }
+      ).catch(() => {
+        onlineStatus.textContent = "联机输入发送失败";
+      });
     }
 
     renderOnlineRoom() {
@@ -593,11 +744,11 @@
             },
           }
         );
-        this.multiplayer.room = payload.room;
-        this.renderOnlineRoom();
-      } catch (error) {
-        onlineStatus.textContent = error.message;
-      }
+      this.multiplayer.room = payload.room;
+      this.renderOnlineRoom();
+    } catch (error) {
+      onlineStatus.textContent = error.message;
+    }
     }
 
     async startOnlineRoom() {
@@ -1058,6 +1209,14 @@
     }
 
     update(dt) {
+      if (this.selectedMode === "online" && this.multiplayer.matchActive) {
+        if (!this.finished) {
+          this.sendOnlineInput(false);
+        }
+        this.render();
+        return;
+      }
+
       if (this.state !== "playing" || this.finished) {
         this.render();
         return;
@@ -2287,10 +2446,12 @@
 
       for (let i = 0; i < ordered.length; i += 1) {
         const snake = ordered[i];
-        if (!snake.alive || snake.trail.length < 2) {
+        if (!snake.alive) {
           continue;
         }
-        this.drawSnakeBody(snake);
+        if (snake.trail.length >= 2) {
+          this.drawSnakeBody(snake);
+        }
 
         const head = this.worldToScreen(snake.x, snake.y);
         const headRadius = snake.radius * this.camera.zoom;

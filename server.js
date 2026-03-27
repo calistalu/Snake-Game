@@ -3,10 +3,13 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { randomUUID } = require("crypto");
+const { MultiplayerMatch } = require("./multiplayer-engine");
 
 const HOST = process.env.HOST || "0.0.0.0";
 const PORT = Number(process.env.PORT || 3000);
 const ROOT = __dirname;
+const MATCH_TICK_MS = 50;
+const MATCH_BROADCAST_MS = 100;
 
 const CONTENT_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -21,6 +24,12 @@ const CONTENT_TYPES = {
 };
 
 const rooms = new Map();
+
+function setCorsHeaders(target) {
+  target["Access-Control-Allow-Origin"] = "*";
+  target["Access-Control-Allow-Headers"] = "Content-Type";
+  target["Access-Control-Allow-Methods"] = "GET,POST,OPTIONS";
+}
 
 function getLanUrls(port) {
   const interfaces = os.networkInterfaces();
@@ -40,11 +49,13 @@ function getLanUrls(port) {
 
 function sendJson(res, statusCode, payload) {
   const body = JSON.stringify(payload);
-  res.writeHead(statusCode, {
+  const headers = {
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "no-store",
     "Content-Length": Buffer.byteLength(body),
-  });
+  };
+  setCorsHeaders(headers);
+  res.writeHead(statusCode, headers);
   res.end(body);
 }
 
@@ -99,8 +110,20 @@ function roomSnapshot(room) {
 function broadcastRoom(room) {
   room.updatedAt = Date.now();
   const snapshot = roomSnapshot(room);
-  room.streams.forEach((res) => {
-    sendSse(res, "room", snapshot);
+  room.streams.forEach((stream) => {
+    sendSse(stream.res, "room", snapshot);
+  });
+}
+
+function broadcastMatch(room) {
+  if (!room.match) {
+    return;
+  }
+  room.streams.forEach((stream) => {
+    if (!stream.playerId) {
+      return;
+    }
+    sendSse(stream.res, "match", room.match.createSnapshotFor(stream.playerId));
   });
 }
 
@@ -144,9 +167,40 @@ function cleanupRoom(room) {
   }
 }
 
+function tickMatches() {
+  const now = Date.now();
+  rooms.forEach((room) => {
+    if (!room.match || room.phase !== "playing") {
+      return;
+    }
+    room.match.step(MATCH_TICK_MS / 1000);
+    if (!room.lastMatchBroadcastAt || now - room.lastMatchBroadcastAt >= MATCH_BROADCAST_MS) {
+      room.lastMatchBroadcastAt = now;
+      broadcastMatch(room);
+    }
+    if (room.match.finished && room.phase !== "finished") {
+      room.lastMatchBroadcastAt = now;
+      broadcastMatch(room);
+      room.phase = "finished";
+      room.players.forEach((player) => {
+        player.ready = false;
+      });
+      room.message = room.match.winner
+        ? "战斗结束，胜者 " + room.match.winner.id
+        : "战斗结束，全员覆灭";
+      broadcastRoom(room);
+    }
+  });
+}
+
 async function handleApi(req, res, pathname) {
   if (req.method === "GET" && pathname === "/api/health") {
-    sendJson(res, 200, { ok: true, now: Date.now(), rooms: rooms.size });
+    sendJson(res, 200, {
+      ok: true,
+      now: Date.now(),
+      rooms: rooms.size,
+      activeMatches: Array.from(rooms.values()).filter((room) => room.phase === "playing").length,
+    });
     return true;
   }
 
@@ -172,6 +226,8 @@ async function handleApi(req, res, pathname) {
       message: "等待玩家加入",
       players: [player],
       streams: new Set(),
+      match: null,
+      lastMatchBroadcastAt: 0,
     };
     rooms.set(code, room);
     sendJson(res, 201, {
@@ -204,22 +260,34 @@ async function handleApi(req, res, pathname) {
     if (player) {
       player.connected = true;
     }
-    res.writeHead(200, {
+    const headers = {
       "Content-Type": "text/event-stream; charset=utf-8",
       "Cache-Control": "no-cache, no-transform",
       Connection: "keep-alive",
-    });
+    };
+    setCorsHeaders(headers);
+    res.writeHead(200, headers);
     res.write("\n");
-    room.streams.add(res);
+    const stream = {
+      res,
+      playerId,
+    };
+    room.streams.add(stream);
     sendSse(res, "room", roomSnapshot(room));
+    if (room.match) {
+      sendSse(res, "match", room.match.createSnapshotFor(playerId));
+    }
     const heartbeat = setInterval(() => {
       res.write(": ping\n\n");
     }, 15_000);
     req.on("close", () => {
       clearInterval(heartbeat);
-      room.streams.delete(res);
+      room.streams.delete(stream);
       if (player) {
         player.connected = false;
+        if (room.match) {
+          room.match.clearPlayerInput(player.id);
+        }
         broadcastRoom(room);
       }
       cleanupRoom(room);
@@ -263,6 +331,10 @@ async function handleApi(req, res, pathname) {
     if (!player) {
       return true;
     }
+    if (room.phase !== "lobby") {
+      sendJson(res, 409, { error: "战斗已开始，无法调整准备状态" });
+      return true;
+    }
     player.ready = Boolean(body.ready);
     room.message = room.players.every((entry) => entry.ready)
       ? "全员准备，可以由房主开始"
@@ -277,6 +349,10 @@ async function handleApi(req, res, pathname) {
     if (!player) {
       return true;
     }
+    if (room.phase !== "lobby") {
+      sendJson(res, 409, { error: "房间已不在大厅阶段" });
+      return true;
+    }
     if (player.id !== room.hostId) {
       sendJson(res, 403, { error: "只有房主可以开始" });
       return true;
@@ -289,10 +365,27 @@ async function handleApi(req, res, pathname) {
       sendJson(res, 409, { error: "还有玩家未准备" });
       return true;
     }
-    room.phase = "sync-pending";
-    room.message = "联机战斗同步下一步接入，这一版先打通房间与实时同步。";
+    room.phase = "playing";
+    room.message = "联机战斗进行中";
+    room.match = new MultiplayerMatch(room);
+    room.lastMatchBroadcastAt = 0;
     broadcastRoom(room);
+    broadcastMatch(room);
     sendJson(res, 200, { room: roomSnapshot(room) });
+    return true;
+  }
+
+  if (req.method === "POST" && action === "input") {
+    const player = requirePlayer(room, body.playerId, res);
+    if (!player) {
+      return true;
+    }
+    if (!room.match || (room.phase !== "playing" && room.phase !== "finished")) {
+      sendJson(res, 409, { error: "联机战斗尚未开始" });
+      return true;
+    }
+    room.match.setPlayerInput(player.id, body.input || {});
+    sendJson(res, 200, { ok: true });
     return true;
   }
 
@@ -304,10 +397,18 @@ async function handleApi(req, res, pathname) {
     }
     const leavingPlayer = room.players[playerIndex];
     room.players.splice(playerIndex, 1);
+    if (room.match) {
+      room.match.handlePlayerLeave(leavingPlayer.id);
+    }
     if (room.hostId === leavingPlayer.id && room.players[0]) {
       room.hostId = room.players[0].id;
     }
-    room.message = room.players.length > 0 ? "有玩家离开了房间" : "房间已关闭";
+    room.message =
+      room.players.length > 0
+        ? room.phase === "playing"
+          ? "有玩家离开，战斗继续"
+          : "有玩家离开了房间"
+        : "房间已关闭";
     broadcastRoom(room);
     cleanupRoom(room);
     sendJson(res, 200, { ok: true });
@@ -329,25 +430,38 @@ function serveStatic(req, res, pathname) {
   fs.readFile(absolutePath, (error, data) => {
     if (error) {
       if (error.code === "ENOENT") {
-        res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+        const headers = { "Content-Type": "text/plain; charset=utf-8" };
+        setCorsHeaders(headers);
+        res.writeHead(404, headers);
         res.end("Not found");
         return;
       }
-      res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
+      const headers = { "Content-Type": "text/plain; charset=utf-8" };
+      setCorsHeaders(headers);
+      res.writeHead(500, headers);
       res.end("Internal server error");
       return;
     }
     const ext = path.extname(absolutePath).toLowerCase();
-    res.writeHead(200, {
+    const headers = {
       "Content-Type": CONTENT_TYPES[ext] || "application/octet-stream",
       "Cache-Control": ext === ".html" ? "no-store" : "public, max-age=3600",
-    });
+    };
+    setCorsHeaders(headers);
+    res.writeHead(200, headers);
     res.end(data);
   });
 }
 
 const server = http.createServer(async (req, res) => {
   try {
+    if (req.method === "OPTIONS") {
+      const headers = {};
+      setCorsHeaders(headers);
+      res.writeHead(204, headers);
+      res.end();
+      return;
+    }
     const url = new URL(req.url, `http://${req.headers.host}`);
     const handled = await handleApi(req, res, url.pathname);
     if (handled) {
@@ -358,6 +472,8 @@ const server = http.createServer(async (req, res) => {
     sendJson(res, 500, { error: "服务器异常", detail: error.message });
   }
 });
+
+setInterval(tickMatches, MATCH_TICK_MS);
 
 server.listen(PORT, HOST, () => {
   console.log(`Multiplayer server running at http://localhost:${PORT}`);
