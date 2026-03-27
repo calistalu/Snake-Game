@@ -236,6 +236,7 @@
         matchActive: false,
         matchFetchInFlight: false,
         matchPollTimer: 0,
+        snapshotVersion: 0,
         lastInputSentAt: 0,
         lastInputSignature: "",
         fireSeq: 0,
@@ -483,6 +484,7 @@
         window.clearTimeout(this.multiplayer.matchPollTimer);
       }
       this.multiplayer.matchPollTimer = 0;
+      this.multiplayer.snapshotVersion = 0;
       this.multiplayer.lastInputSentAt = 0;
       this.multiplayer.lastInputSignature = "";
       this.multiplayer.fireSeq = 0;
@@ -526,6 +528,100 @@
       }
     }
 
+    cloneOnlineTrail(trail) {
+      return (trail || []).map(function (point) {
+        return {
+          x: point.x,
+          y: point.y,
+        };
+      });
+    }
+
+    mergeOnlineSnake(existingSnake, incomingSnake) {
+      if (!existingSnake) {
+        incomingSnake.trail = this.cloneOnlineTrail(incomingSnake.trail);
+        incomingSnake.netX = incomingSnake.x;
+        incomingSnake.netY = incomingSnake.y;
+        incomingSnake.netAngle = incomingSnake.angle;
+        incomingSnake.netDesiredAngle = incomingSnake.desiredAngle;
+        incomingSnake.netTrail = this.cloneOnlineTrail(incomingSnake.trail);
+        incomingSnake.damageTexts = incomingSnake.damageTexts || [];
+        return incomingSnake;
+      }
+
+      const targetTrail = this.cloneOnlineTrail(incomingSnake.trail);
+      existingSnake.netX = incomingSnake.x;
+      existingSnake.netY = incomingSnake.y;
+      existingSnake.netAngle = incomingSnake.angle;
+      existingSnake.netDesiredAngle = incomingSnake.desiredAngle;
+      existingSnake.netTrail = targetTrail;
+
+      existingSnake.id = incomingSnake.id;
+      existingSnake.name = incomingSnake.name;
+      existingSnake.playerId = incomingSnake.playerId;
+      existingSnake.isHuman = incomingSnake.isHuman;
+      existingSnake.isPlayer = incomingSnake.isPlayer;
+      existingSnake.alive = incomingSnake.alive;
+      existingSnake.hp = incomingSnake.hp;
+      existingSnake.radius = incomingSnake.radius;
+      existingSnake.bodyLength = incomingSnake.bodyLength;
+      existingSnake.pointSpacing = incomingSnake.pointSpacing;
+      existingSnake.segmentCount = incomingSnake.segmentCount;
+      existingSnake.missiles = incomingSnake.missiles;
+      existingSnake.kills = incomingSnake.kills;
+      existingSnake.effects = incomingSnake.effects || existingSnake.effects;
+      existingSnake.bodyColor = incomingSnake.bodyColor;
+      existingSnake.headColor = incomingSnake.headColor;
+      existingSnake.textColor = incomingSnake.textColor;
+      existingSnake.damageTexts = incomingSnake.damageTexts || [];
+
+      if (
+        distSq(existingSnake.x, existingSnake.y, incomingSnake.x, incomingSnake.y) >
+        240 * 240
+      ) {
+        existingSnake.x = incomingSnake.x;
+        existingSnake.y = incomingSnake.y;
+      }
+
+      if (
+        !existingSnake.trail ||
+        existingSnake.trail.length === 0 ||
+        Math.abs(existingSnake.trail.length - targetTrail.length) > 24
+      ) {
+        existingSnake.trail = this.cloneOnlineTrail(targetTrail);
+      }
+
+      while (existingSnake.trail.length < targetTrail.length) {
+        const tail = existingSnake.trail[existingSnake.trail.length - 1] || {
+          x: existingSnake.x,
+          y: existingSnake.y,
+        };
+        existingSnake.trail.push({ x: tail.x, y: tail.y });
+      }
+
+      while (existingSnake.trail.length > targetTrail.length) {
+        existingSnake.trail.pop();
+      }
+
+      return existingSnake;
+    }
+
+    reconcileOnlineSnakes(snapshotSnakes) {
+      const previousById = new Map();
+      for (let i = 0; i < this.snakes.length; i += 1) {
+        previousById.set(this.snakes[i].id, this.snakes[i]);
+      }
+
+      const merged = [];
+      for (let i = 0; i < snapshotSnakes.length; i += 1) {
+        const incomingSnake = snapshotSnakes[i];
+        merged.push(
+          this.mergeOnlineSnake(previousById.get(incomingSnake.id) || null, incomingSnake)
+        );
+      }
+      return merged;
+    }
+
     applyOnlineMatchSnapshot(snapshot) {
       console.log("[online:match]", {
         phase: snapshot.phase,
@@ -536,6 +632,7 @@
       const wasFinished = this.finished;
       this.selectedMode = "online";
       this.multiplayer.matchActive = true;
+      this.multiplayer.snapshotVersion += 1;
       if (this.multiplayer.matchPollTimer) {
         window.clearTimeout(this.multiplayer.matchPollTimer);
       }
@@ -543,11 +640,7 @@
       this.time = snapshot.time || 0;
       this.zoneTargets = snapshot.zoneTargets || this.zoneTargets;
       this.chestEvents = snapshot.chestEvents || [];
-      this.snakes = (snapshot.snakes || []).map(function (snake) {
-        snake.trail = snake.trail || [];
-        snake.damageTexts = snake.damageTexts || [];
-        return snake;
-      });
+      this.snakes = this.reconcileOnlineSnakes(snapshot.snakes || []);
       this.dots = snapshot.dots || [];
       this.items = snapshot.items || [];
       this.crates = snapshot.crates || [];
@@ -582,6 +675,82 @@
 
       if (this.finished && !wasFinished) {
         this.showOnlineMatchResult(snapshot.summary);
+      }
+    }
+
+    interpolateOnlineState(dt) {
+      const zone = this.getCurrentZone(this.time);
+      const incoming = this.getIncomingZone(this.time);
+      this.handlePhaseMessages(zone, incoming);
+
+      for (let i = 0; i < this.snakes.length; i += 1) {
+        const snake = this.snakes[i];
+        if (typeof snake.netX !== "number" || typeof snake.netY !== "number") {
+          continue;
+        }
+
+        const alpha = 1 - Math.exp(-dt * (snake.isPlayer ? 18 : 12));
+        if (distSq(snake.x, snake.y, snake.netX, snake.netY) > 260 * 260) {
+          snake.x = snake.netX;
+          snake.y = snake.netY;
+        } else {
+          snake.x = lerp(snake.x, snake.netX, alpha);
+          snake.y = lerp(snake.y, snake.netY, alpha);
+        }
+
+        const angleTarget =
+          typeof snake.netAngle === "number" ? snake.netAngle : snake.angle;
+        snake.angle += normalizeAngle(angleTarget - snake.angle) * alpha;
+        if (typeof snake.netDesiredAngle === "number") {
+          snake.desiredAngle = snake.netDesiredAngle;
+        }
+
+        const targetTrail = snake.netTrail || [];
+        if (targetTrail.length === 0) {
+          continue;
+        }
+
+        if (!snake.trail || snake.trail.length === 0) {
+          snake.trail = this.cloneOnlineTrail(targetTrail);
+        }
+
+        while (snake.trail.length < targetTrail.length) {
+          const tail = snake.trail[snake.trail.length - 1] || {
+            x: snake.x,
+            y: snake.y,
+          };
+          snake.trail.push({ x: tail.x, y: tail.y });
+        }
+
+        while (snake.trail.length > targetTrail.length) {
+          snake.trail.pop();
+        }
+
+        const trailAlpha = 1 - Math.exp(-dt * (snake.isPlayer ? 16 : 10));
+        for (let j = 0; j < targetTrail.length; j += 1) {
+          const currentPoint = snake.trail[j];
+          const targetPoint = targetTrail[j];
+          if (
+            distSq(currentPoint.x, currentPoint.y, targetPoint.x, targetPoint.y) >
+            220 * 220
+          ) {
+            currentPoint.x = targetPoint.x;
+            currentPoint.y = targetPoint.y;
+          } else {
+            currentPoint.x = lerp(currentPoint.x, targetPoint.x, trailAlpha);
+            currentPoint.y = lerp(currentPoint.y, targetPoint.y, trailAlpha);
+          }
+        }
+
+        if (snake.isPlayer && snake.damageTexts) {
+          for (let j = snake.damageTexts.length - 1; j >= 0; j -= 1) {
+            snake.damageTexts[j].life -= dt;
+            snake.damageTexts[j].offsetY -= 42 * dt;
+            if (snake.damageTexts[j].life <= 0) {
+              snake.damageTexts.splice(j, 1);
+            }
+          }
+        }
       }
     }
 
@@ -1285,8 +1454,10 @@
     update(dt) {
       if (this.selectedMode === "online" && this.multiplayer.matchActive) {
         if (!this.finished) {
+          this.time += dt;
           this.sendOnlineInput(false);
         }
+        this.interpolateOnlineState(dt);
         this.render();
         return;
       }
