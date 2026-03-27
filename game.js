@@ -234,6 +234,7 @@
         playerId: "",
         eventSource: null,
         matchActive: false,
+        matchFetchInFlight: false,
         lastInputSentAt: 0,
         lastInputSignature: "",
         fireSeq: 0,
@@ -476,6 +477,7 @@
       this.multiplayer.room = null;
       this.multiplayer.playerId = "";
       this.multiplayer.matchActive = false;
+      this.multiplayer.matchFetchInFlight = false;
       this.multiplayer.lastInputSentAt = 0;
       this.multiplayer.lastInputSignature = "";
       this.multiplayer.fireSeq = 0;
@@ -520,6 +522,11 @@
     }
 
     applyOnlineMatchSnapshot(snapshot) {
+      console.log("[online:match]", {
+        phase: snapshot.phase,
+        time: snapshot.time,
+        snakes: snapshot.snakes ? snapshot.snakes.length : 0,
+      });
       const wasActive = this.multiplayer.matchActive;
       const wasFinished = this.finished;
       this.selectedMode = "online";
@@ -652,6 +659,10 @@
         return;
       }
 
+      if ((room.phase === "playing" || room.phase === "finished") && !this.multiplayer.matchActive) {
+        this.fetchOnlineMatchSnapshot();
+      }
+
       roomPanel.classList.remove("hidden");
       roomCodeLabel.textContent = room.code;
       roomPhaseLabel.textContent = room.phase;
@@ -660,7 +671,7 @@
       const selfPlayer = room.players.find((player) => player.id === this.multiplayer.playerId);
       readyButton.textContent = selfPlayer && selfPlayer.ready ? "取消准备" : "准备";
 
-      onlinePlayerList.innerHTML = room.players
+        onlinePlayerList.innerHTML = room.players
         .map((player) => {
           return (
             '<div class="online-player-row' +
@@ -681,6 +692,32 @@
           );
         })
         .join("");
+    }
+
+    async fetchOnlineMatchSnapshot() {
+      if (
+        this.multiplayer.matchFetchInFlight ||
+        !this.multiplayer.room ||
+        !this.multiplayer.playerId
+      ) {
+        return;
+      }
+      this.multiplayer.matchFetchInFlight = true;
+      try {
+        const payload = await this.apiRequest(
+          "/api/rooms/" +
+            encodeURIComponent(this.multiplayer.room.code) +
+            "/match?playerId=" +
+            encodeURIComponent(this.multiplayer.playerId)
+        );
+        if (payload && payload.match) {
+          console.log("[online:match-fetch]", payload.match.phase, payload.match.time);
+          this.applyOnlineMatchSnapshot(payload.match);
+        }
+      } catch (_error) {
+      } finally {
+        this.multiplayer.matchFetchInFlight = false;
+      }
     }
 
     async createOnlineRoom() {
@@ -768,6 +805,9 @@
         );
         this.multiplayer.room = payload.room;
         this.renderOnlineRoom();
+        if (payload.room && (payload.room.phase === "playing" || payload.room.phase === "finished")) {
+          this.fetchOnlineMatchSnapshot();
+        }
       } catch (error) {
         onlineStatus.textContent = error.message;
       }

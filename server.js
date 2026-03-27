@@ -10,6 +10,7 @@ const PORT = Number(process.env.PORT || 3000);
 const ROOT = __dirname;
 const MATCH_TICK_MS = 50;
 const MATCH_BROADCAST_MS = 100;
+const APP_VERSION = "2026-03-27-online-fix2";
 
 const CONTENT_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -197,6 +198,7 @@ async function handleApi(req, res, pathname) {
   if (req.method === "GET" && pathname === "/api/health") {
     sendJson(res, 200, {
       ok: true,
+      version: APP_VERSION,
       now: Date.now(),
       rooms: rooms.size,
       activeMatches: Array.from(rooms.values()).filter((room) => room.phase === "playing").length,
@@ -230,6 +232,7 @@ async function handleApi(req, res, pathname) {
       lastMatchBroadcastAt: 0,
     };
     rooms.set(code, room);
+    console.log(`[room:create] code=${code} host=${player.name} playerId=${player.id}`);
     sendJson(res, 201, {
       room: roomSnapshot(room),
       playerId: player.id,
@@ -254,6 +257,21 @@ async function handleApi(req, res, pathname) {
     return true;
   }
 
+  if (req.method === "GET" && action === "match") {
+    const playerId = String(new URL(req.url, `http://${req.headers.host}`).searchParams.get("playerId") || "");
+    if (!playerId) {
+      sendJson(res, 400, { error: "缺少 playerId" });
+      return true;
+    }
+    if (!room.match) {
+      sendJson(res, 409, { error: "联机战斗尚未开始" });
+      return true;
+    }
+    console.log(`[match:fetch] code=${room.code} playerId=${playerId} phase=${room.phase}`);
+    sendJson(res, 200, { match: room.match.createSnapshotFor(playerId) });
+    return true;
+  }
+
   if (req.method === "GET" && action === "events") {
     const playerId = String(new URL(req.url, `http://${req.headers.host}`).searchParams.get("playerId") || "");
     const player = room.players.find((entry) => entry.id === playerId);
@@ -273,6 +291,7 @@ async function handleApi(req, res, pathname) {
       playerId,
     };
     room.streams.add(stream);
+    console.log(`[sse:open] code=${room.code} playerId=${playerId || "unknown"} phase=${room.phase}`);
     sendSse(res, "room", roomSnapshot(room));
     if (room.match) {
       sendSse(res, "match", room.match.createSnapshotFor(playerId));
@@ -283,6 +302,7 @@ async function handleApi(req, res, pathname) {
     req.on("close", () => {
       clearInterval(heartbeat);
       room.streams.delete(stream);
+      console.log(`[sse:close] code=${room.code} playerId=${playerId || "unknown"} phase=${room.phase}`);
       if (player) {
         player.connected = false;
         if (room.match) {
@@ -318,6 +338,7 @@ async function handleApi(req, res, pathname) {
     };
     room.players.push(player);
     room.message = "玩家已加入";
+    console.log(`[room:join] code=${room.code} player=${player.name} playerId=${player.id}`);
     broadcastRoom(room);
     sendJson(res, 200, {
       room: roomSnapshot(room),
@@ -369,6 +390,9 @@ async function handleApi(req, res, pathname) {
     room.message = "联机战斗进行中";
     room.match = new MultiplayerMatch(room);
     room.lastMatchBroadcastAt = 0;
+    console.log(
+      `[room:start] code=${room.code} host=${player.id} players=${room.players.length} version=${APP_VERSION}`
+    );
     broadcastRoom(room);
     broadcastMatch(room);
     sendJson(res, 200, { room: roomSnapshot(room) });
@@ -400,6 +424,7 @@ async function handleApi(req, res, pathname) {
     if (room.match) {
       room.match.handlePlayerLeave(leavingPlayer.id);
     }
+    console.log(`[room:leave] code=${room.code} playerId=${leavingPlayer.id}`);
     if (room.hostId === leavingPlayer.id && room.players[0]) {
       room.hostId = room.players[0].id;
     }
@@ -445,7 +470,10 @@ function serveStatic(req, res, pathname) {
     const ext = path.extname(absolutePath).toLowerCase();
     const headers = {
       "Content-Type": CONTENT_TYPES[ext] || "application/octet-stream",
-      "Cache-Control": ext === ".html" ? "no-store" : "public, max-age=3600",
+      "Cache-Control":
+        ext === ".html" || ext === ".js" || ext === ".css"
+          ? "no-store"
+          : "public, max-age=3600",
     };
     setCorsHeaders(headers);
     res.writeHead(200, headers);
@@ -477,6 +505,7 @@ setInterval(tickMatches, MATCH_TICK_MS);
 
 server.listen(PORT, HOST, () => {
   console.log(`Multiplayer server running at http://localhost:${PORT}`);
+  console.log(`Server version: ${APP_VERSION}`);
   const lanUrls = getLanUrls(PORT);
   if (lanUrls.length > 0) {
     console.log("LAN URLs:");
