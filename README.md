@@ -1,60 +1,70 @@
 # 贪吃蛇之太空危机逃亡
 
-一个纯 `HTML5 Canvas` 的电脑端单页游戏，支持单机混战和服务器权威的联机战斗。
+一个H5 Canvas电脑端单页游戏，支持单机和联机两种模式。Vibe Coding制作， 已部署在[网站](https://snake-game-cje1.onrender.com)。
 
-## 启动
+## 玩法介绍
 
-直接打开 [index.html](/Users/apple/Desktop/game/index.html) 即可开始。
+### 操作
+- 移动：`WASD` 或 `方向键`
+- 发射导弹：`Space`
+- 加速：`N`
 
-如果你更想用本地服务，也可以在当前目录执行：
+### 核心规则
+- 开局生命值 `100`，上限 `5000`
+- 生命越高，蛇越粗越长
+- 场上只剩 1 条蛇时，玩家胜利
+- 血量低于 `400` 时，再吃伤害会直接死亡
+- 获取生命值：道具或伤害其他蛇（撞蛇身任意部位/导弹命中）
 
-```bash
-python3 -m http.server 8000
-```
+### 状态效果
+- 磁铁：`5s`，扩大吸附范围
+- 减速：`5s`，碰到 UFO 水滴触发
+- 保护：受伤后自动触发 `5s` 护盾
+- 辐射：在安全区外持续掉血
 
-然后访问 [http://localhost:8000](http://localhost:8000)。
+### 地图事件
+- 宝箱：出现前 `15s` 地图标记位置，含1000生命值
+- 辐射扩散：提前 `20s` 预警并显示倒计时
 
-如果你要体验联机大厅，请在当前目录执行：
+---
 
-```bash
-npm start
-```
+## Space Snake: Radiation Escape (Quick Guide)
 
-然后访问 [http://localhost:3000](http://localhost:3000)。
+### Controls
+- Move: `WASD` or `Arrow Keys`
+- Fire missile: `Space`
+- Boost: `N`
 
-如果要让另一台电脑加入：
+### Win Condition
+- Start HP: `100`, Max HP: `5000`
+- More HP = bigger/longer snake
+- Match ends when only one snake is alive
+- If HP is below `400`, the next hit is fatal
 
-```bash
-npm start
-```
+### What to Focus On
+- Collect resources: dots (`+1`) and wreckage (auto-pickup at close range)
+- Grab items: Mushroom (`+20`), Star (`+40`), Heart (`+1000`)
+- Deal damage: enemy HP loss is converted to your HP (up to 5000)
 
-启动后终端会打印你的局域网地址，例如 `http://192.168.1.23:3000`。
-让另一台电脑和你在同一个局域网下，直接在浏览器打开这个地址即可加入。
+### Damage Rules
+- Your head hitting another snake’s body deals damage to you
+- Missile creates a ring in front of you and resolves after `1s`
+- On hit: target loses `40%` current HP, same amount goes to shooter
+- Your missiles are blue and won’t hurt you; enemy missiles are red
 
-注意：
+### Status Effects
+- Magnet: `5s`, larger pickup pull range
+- Slow: `5s`, triggered by UFO droplets
+- Shield: auto `5s` after taking damage
+- Radiation: constant damage outside safe zone (no timer icon)
 
-- 两台电脑要在同一个 Wi-Fi / 局域网
-- 系统防火墙如果弹出提示，要允许 Node 接收局域网连接
-- 联机大厅和页面都由这个地址提供，另一台电脑不要打开本地 `file` 文件
-
-## 操作
-
-- `WASD` 或方向键：移动
-- `Space`：发射导弹
-- `N`：加速
-- `R`：重新开始
-
-## 已实现内容
-
-- 20 条蛇同场混战，最后一条存活获胜
-- 4 次辐射缩圈，带提前预警和小地图预演
-- 导弹、物资箱、UFO、宝箱、漂浮掉落物
-- 磁铁 / 减速 / 保护 / 辐射状态 HUD
-- 蛇头血量心形显示、玩家导弹增减血浮字
-- 19 条 AI 会抢资源、抢宝箱、追击和放导弹
-- 联机第一版：创建房间、加入房间、准备、房主开始、4 人房间 + AI 补满到 20 蛇、服务器权威同步战斗
-
-## 说明
-
-这版美术资源使用了代码自绘的科幻矢量风格图形，方便你直接运行和继续改造。
-联机目前采用房间服务器统一模拟战斗，客户端通过 `WebSocket` 持续收发实时状态；当前大厅人数上限是 4 名真人玩家，其余位置由 AI 补满。
+### Timed Events
+- Chests:
+  - `90s`: 3 chests
+  - `180s`: 2 chests
+  - `240s`: 1 chest
+  - Spawn markers appear `15s` early
+- Radiation shrinks:
+  - Starts at `60s`, `120s`, `210s`
+  - Each shrink lasts `10s`
+  - `20s` warning before each shrink
